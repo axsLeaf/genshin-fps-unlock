@@ -1,9 +1,4 @@
-#define KEY_TOGGLE VK_END
-#define KEY_INCREASE VK_UP
-#define KEY_INCREASE_SMALL VK_RIGHT
-#define KEY_DECREASE VK_DOWN
-#define KEY_DECREASE_SMALL VK_LEFT
-#define FPS_TARGET 120
+#define FPS_TARGET 165
 
 // do not touch anything below
 // unless you know what you're doing
@@ -198,79 +193,6 @@ void LoadConfig()
     }
 }
 
-void InjectReshade(HANDLE hProcess)
-{
-    std::string buffer;
-    buffer.reserve(GetCurrentDirectoryA(0, nullptr));
-    ZeroMemory(buffer.data(), buffer.capacity());
-    GetCurrentDirectoryA(buffer.capacity(), buffer.data());
-
-    std::string DLLPath = buffer.c_str() + std::string("\\ReShade64.dll");
-    if (GetFileAttributesA(DLLPath.c_str()) == INVALID_FILE_ATTRIBUTES)
-        return;
-
-    printf("\nReShade found\n");
-    printf("Injecting ReShade...\n");
-
-    LPVOID pPath = VirtualAllocEx(hProcess, nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if (!pPath)
-    {
-        DWORD code = GetLastError();
-        printf("VirtualAllocEx failed (%d): %s\n", code, GetLastErrorAsString(code).c_str());
-        return;
-    }
-
-    WriteProcessMemory(hProcess, pPath, DLLPath.data(), DLLPath.length(), nullptr);
-
-    HANDLE hThread = CreateRemoteThread(hProcess, nullptr, 0, (LPTHREAD_START_ROUTINE)LoadLibraryA, pPath, 0, nullptr);
-    if (!hThread)
-    {
-        DWORD code = GetLastError();
-        printf("CreateRemoteThread failed (%d): %s\n", code, GetLastErrorAsString(code).c_str());
-        return;
-    }
-
-    WaitForSingleObject(hThread, -1);
-    VirtualFreeEx(hProcess, pPath, 0, MEM_RELEASE);
-    CloseHandle(hThread);
-
-    printf("ReShade loaded\n\n");
-}
-
-DWORD __stdcall Thread1(LPVOID p)
-{
-    if (!p)
-        return 0;
-
-    int* pTargetFPS = (int*)p;
-    int fps = *pTargetFPS;
-    int prev = fps;
-    while (!bStop)
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(16));
-        if (GetAsyncKeyState(KEY_DECREASE) & 1)
-            fps -= 20;
-        if (GetAsyncKeyState(KEY_DECREASE_SMALL) & 1)
-            fps -= 2;
-        if (GetAsyncKeyState(KEY_INCREASE) & 1)
-            fps += 20;
-        if (GetAsyncKeyState(KEY_INCREASE_SMALL) & 1)
-            fps += 2;
-        if (GetAsyncKeyState(KEY_TOGGLE) & 1)
-            fps = fps != 60 ? 60 : prev;
-        if (prev != fps)
-            WriteConfig(GamePath, fps);
-        if (fps > 60)
-            prev = fps;
-        if (fps < 60)
-            fps = 60;
-        printf("\rFPS: %d - %s    ", fps, fps > 60 ? "ON" : "OFF");
-        *pTargetFPS = fps;
-    }
-
-    return 0;
-}
-
 int main(int argc, char** argv)
 {
     std::atexit([] {
@@ -310,8 +232,6 @@ int main(int argc, char** argv)
     MODULEENTRY32 hUnityPlayer{};
     while (!GetModule(pi.dwProcessId, "UnityPlayer.dll", &hUnityPlayer))
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-    InjectReshade(pi.hProcess);
 
     printf("UnityPlayer: %X%X\n", (uintptr_t)hUnityPlayer.modBaseAddr >> 32 & -1, hUnityPlayer.modBaseAddr);
 
@@ -377,15 +297,7 @@ int main(int argc, char** argv)
 
     VirtualFree(mem, 0, MEM_RELEASE);
     printf("Done\n\n");
-    printf("Use arrow keys to change limit:\n");
-    printf("  UP:    +20\n");
-    printf("  DOWN:  -20\n");
-    printf("  LEFT:  -2\n");
-    printf("  RIGHT: +2\n\n");
-
-    // keybinds thread
-    HANDLE hThread = CreateThread(nullptr, 0, Thread1, &TargetFPS, 0, nullptr);
-
+    
     DWORD ExitCode = STILL_ACTIVE;
     while (ExitCode == STILL_ACTIVE)
     {
@@ -410,8 +322,6 @@ int main(int argc, char** argv)
     }
 
     bStop = true;
-    WaitForSingleObject(hThread, -1);
-    CloseHandle(hThread);
     CloseHandle(pi.hProcess);
     TerminateProcess((HANDLE)-1, 0);
 
